@@ -150,3 +150,14 @@ registered presence (see Realtime path).
 - `GET/POST /api/pump-ingest` — relay endpoint for the bridge userscript
   (CORS-open POST, snapshot buffer `{seq, at, items}` on GET).
 
+### Vercel deployment (api/)
+
+Both endpoints (and the fomo ones) only exist under `npm run dev`/`preview` —
+a static deployment 404s every `/api/*`. `api/*.mjs` in the repo root ports
+each middleware to a Vercel serverless function (same shapes, verified against
+the same smoke cases), so `ddududu-tool.vercel.app/api/*` works after a Git
+push. Caveats: `pump-ingest` state is per-instance memory (a cold start can
+drop one bridge POST; the next one — 10s later — catches up), and `fomo-token`
+reads `FOMO_SESSION_JSON` (env var) instead of the gitignored session file.
+
+
