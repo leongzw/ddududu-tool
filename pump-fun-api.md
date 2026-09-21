@@ -51,20 +51,27 @@ posts — newest first with cursor paging.
   from the same box. pump.fun (or the Cloudflare bot-management in front of it)
   authenticates only real browser requests; tokens also rotate on each login.
   Conclusion: no server-side proxy can ever call the authed API.
+- **CORRECTION (2026-09-21): the conclusion above was wrong.** The 401s came
+  from **rotated-out tokens**, not browser fingerprinting — a live token
+  returned 200 from node on the local box AND from the Vercel serverless
+  function, with and without spoofed `Origin`/`Referer` (a bare
+  `Cookie: auth_token=…` suffices). Server-side polling works; the token just
+  has to be current (re-login rotates it, ~30-day `exp`). If a server-side
+  call 401s, suspect the token first, not the transport.
 - Client attach style (from the bundle): `credentials: "include"` cookie +
   optional `Authorization: Bearer` hook + `x-device-id` from `generateDeviceId()`.
 
 ### Solution shipped: `scripts/pump-fun-bridge.user.js`
 
-Same pattern as `scripts/fomo-token-bridge.user.js`: a Tampermonkey userscript
-runs on a logged-in pump.fun tab (browser context → auth always passes), polls
-`/following-positions/alerts` every 10s same-site, and relays the newest page
-two ways — GM storage → `pump-feed-refresh` window event on the tools app
-(same machine), and `POST /api/pump-ingest` (works across the LAN; set
-`TOOL_URL` in the script to the machine running the dev server). The panel
-merges relayed items (dedupe by item key, `fresh` highlight) and its
-Calls/Trades/Posts chips filter client-side. The direct `/api/pump-api` poll
-stays as a dormant fallback.
+Historically the primary source; **optional since 2026-09-21** — the panel now
+polls `/api/pump-api` server-side with a live toolbar token (see the correction
+under "Auth findings"). v1.3.0 of the userscript keeps only the same-machine
+path: it polls `/following-positions/alerts` inside a logged-in pump.fun tab
+and pushes pages into GM storage → `pump-feed-refresh` window event on the
+tools app opened in the same browser (dev server or deployed site); the
+`POST /api/pump-ingest` cross-machine relay was removed along with the
+endpoint. The panel merges relayed items (dedupe by item key, `fresh`
+highlight) and its Calls/Trades/Posts chips filter client-side.
 
 v1.1.0 bridge/panel notes:
 - The pump.fun tab may be pinned/background — v1.0.0 skipped polling whenever
@@ -95,6 +102,13 @@ v1.1.1 bridge/panel notes:
   panel is empty that console is the first thing to check — then verify
   `TOOL_URL` points at the tools machine's LAN address, the dev server runs
   with `--host`, and Tampermonkey's `@connect` allows it.
+
+v1.3.0 bridge/panel notes:
+- `/api/pump-ingest` removed (endpoint + relay + panel polling): live-token
+  server polls via `/api/pump-api` are the primary source (2026-09-21
+  correction), so the bridge no longer POSTs anywhere — GM-storage events only.
+- The panel's poll self-stops after three consecutive 401s with status
+  `401 — paste fresh token` (rotated/expired token); re-pasting restarts it.
 
 ### Realtime path (future)
 
@@ -144,26 +158,20 @@ registered presence (see Realtime path).
 - `POST /api/pump-api {path, token?}` → `GET https://frontend-api-v3.pump.fun<path>`
   with `Origin`/`Referer` set to pump.fun, path charset + `..` validated, token
   charset-validated and forwarded as the `auth_token` cookie, 20s timeout —
-  mirrors `/api/fomo-api`. Needed because of the 403-CORS lock. (Authed paths
-  still 401 server-side per the browser-only finding above; this proxy remains
-  useful for public reads.)
-- `GET/POST /api/pump-ingest` — relay endpoint for the bridge userscript
-  (CORS-open POST, snapshot buffer `{seq, at, items}` on GET).
+  mirrors `/api/fomo-api`. Needed because of the 403-CORS lock. Works for
+  authed reads while the token is live (see the 2026-09-21 correction above);
+  it is the pump panel's primary data source.
+- `GET/POST /api/pump-ingest` — **removed 2026-09-21** together with the
+  bridge relay (history in git, commit 1bd4507).
 
 ### Vercel deployment (api/)
 
-Both endpoints (and the fomo ones) only exist under `npm run dev`/`preview` —
-a static deployment 404s every `/api/*`. `api/*.mjs` in the repo root ports
-each middleware to a Vercel serverless function (same shapes, verified against
-the same smoke cases), so `ddududu-tool.vercel.app/api/*` works after a Git
-push. Caveats: `pump-ingest` state is per-instance memory (a cold start can
-drop one bridge POST; the next one — 10s later — catches up), and `fomo-token`
-reads `FOMO_SESSION_JSON` (env var) instead of the gitignored session file.
-Authed pump.fun reads still 401 from any server (browser-only auth — see
-"Auth findings"), which is why the bridge userscript is the source; v1.2.0+
-defaults `TOOL_URL` to the deployed origin and matches/@connects it, so a
-logged-in pump.fun tab on any machine feeds the deployed panel (same-browser
-GM-storage relay included). The Token Monitor's fallback poll self-stops
-after three consecutive 401s instead of hammering the endpoint forever.
+The vite middlewares only exist under `npm run dev`/`preview` — a static
+deployment 404s every `/api/*`. `api/*.mjs` in the repo root ports each
+middleware to a Vercel serverless function (same shapes), so
+`ddududu-tool.vercel.app/api/*` works after a Git push. Verified 2026-09-21:
+`/api/pump-api` serves live feed data from Vercel with a fresh token — the
+datacenter IP is not blocked. `fomo-token` reads `FOMO_SESSION_JSON`
+(env var) instead of the gitignored session file.
 
 

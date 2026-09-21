@@ -145,45 +145,6 @@ const pumpApi = async (req, res) => {
   }
 };
 
-// Ingest for the pump.fun bridge userscript (scripts/pump-fun-bridge.user.js).
-// pump.fun's authed API enforces browser-only clients (a minutes-old auth_token
-// 401s from node under every transport), so the userscript polls
-// /following-positions/alerts inside a logged-in pump.fun tab and POSTs the
-// latest page here; the Token Monitor GETs it back and merges (dedupe by item
-// key). LAN-local, read-mostly, no credentials stored.
-let pumpIngestState = { seq: 0, at: 0, items: [] };
-const pumpIngest = (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') {
-    res.statusCode = 204;
-    res.end();
-    return;
-  }
-  if (req.method === 'POST') {
-    readBody(req)
-      .then((b) => {
-        if (Array.isArray(b.items)) {
-          // stamp `at` server-side — a skewed bridge machine's clock must never
-          // make fresh pages look stale to the panel (keep client time as clientAt)
-          pumpIngestState = {
-            seq: pumpIngestState.seq + 1,
-            at: Date.now(),
-            clientAt: b.at || 0,
-            items: b.items.slice(0, 50),
-          };
-          json(res, 200, { ok: true, seq: pumpIngestState.seq });
-        } else {
-          json(res, 400, { error: 'items[] required' });
-        }
-      })
-      .catch(() => json(res, 400, { error: 'bad body' }));
-    return;
-  }
-  json(res, 200, pumpIngestState);
-};
-
 function fomoTokenApi() {
   const SESSION_FILE = new URL('./scripts/.fomo-session.json', import.meta.url);
   const serveTokenFile = (_req, res) => {
@@ -201,7 +162,6 @@ function fomoTokenApi() {
     server.middlewares.use('/api/privy-refresh', privyRefresh);
     server.middlewares.use('/api/fomo-api', fomoApi);
     server.middlewares.use('/api/pump-api', pumpApi);
-    server.middlewares.use('/api/pump-ingest', pumpIngest);
   };
   return {
     name: 'fomo-token-api',

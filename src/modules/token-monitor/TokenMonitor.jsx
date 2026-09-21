@@ -133,7 +133,7 @@ const trendEntry = (e) => {
 
 // ---- pump.fun following-alerts helpers (contract from their bundle's zod registry) ----
 const LS_PUMP_TOKEN = 'token-monitor:pump-auth';
-const PUMP_POLL_MS = 5_000; // fallback poll cadence (also re-checks bridge liveness)
+const PUMP_POLL_MS = 5_000; // feed poll cadence (pauses 30s after same-machine bridge delivery)
 const PUMP_CHAINS = { 1399811149: 'Solana', 1: 'Ethereum', 8453: 'Base', 56: 'BSC' };
 const pumpChain = (id) => (id == null ? '' : PUMP_CHAINS[id] || `#${id}`);
 // kind chips: calls = callout+update, trades = trade, posts = the social kinds
@@ -708,16 +708,18 @@ function TokenMonitor() {
     setFeedId(DEFAULT_FEED_ID);
   };
 
-  // ---- pump.fun following panel (bridge userscript + REST poll fallback) ----
+  // ---- pump.fun following panel (server poll via /api/pump-api) ----
   // Mirrors fomo's trading_activity: everything the signed-in user's followed
   // pump.fun accounts do — callouts, updates, trades (optionally posts) — from
-  // GET /following-positions/alerts. pump.fun enforces browser-only auth (even
-  // a minutes-old auth_token 401s from node, under every transport), so the
-  // primary source is scripts/pump-fun-bridge.user.js polling inside a
-  // logged-in pump.fun tab, relaying items as 'pump-feed-refresh' events
-  // (same machine, GM storage) and via POST /api/pump-ingest (LAN). The direct
-  // /api/pump-api poll below is only a fallback and pauses while the bridge
-  // is delivering. (pumpAlerts itself is declared above tokenStats.)
+  // GET /following-positions/alerts. 2026-09-21 correction (pump-fun-api.md
+  // "Auth findings"): the authed API DOES accept server-side calls with a
+  // live auth_token — earlier 401s were rotated-out tokens (pump.fun rotates
+  // tokens on every login). So the primary source is the /api/pump-api poll
+  // below with the toolbar token; scripts/pump-fun-bridge.user.js remains an
+  // optional same-machine accelerator ('pump-feed-refresh' GM-storage events
+  // merge in, dedupe by item key). Token lifecycle: rotates on every re-login,
+  // ~30-day expiry — on 401 the poll self-stops until a fresh token is pasted.
+  // (pumpAlerts itself is declared above tokenStats.)
   const [pumpStatus, setPumpStatus] = useState({ state: 'idle', detail: '' }); // idle | ok | auth | error
   const [pumpToken, setPumpToken] = useState(() => localStorage.getItem(LS_PUMP_TOKEN) || '');
   const [pumpMinUsd, setPumpMinUsd] = useState(10); // minTradeAmountUsd — trade rows only
@@ -759,43 +761,16 @@ function TokenMonitor() {
     return () => window.removeEventListener('pump-feed-refresh', onFeed);
   }, []);
 
-  // bridge path 2: POST /api/pump-ingest relay (works across machines on the LAN)
-  useEffect(() => {
-    let alive = true;
-    let lastSeq = -1;
-    const id = setInterval(async () => {
-      try {
-        const r = await fetch('/api/pump-ingest');
-        if (!r.ok) return;
-        const d = await r.json();
-        if (!alive) return;
-        if (Array.isArray(d.items) && d.items.length > 0 && d.seq !== lastSeq) {
-          lastSeq = d.seq;
-          mergePumpRef.current(d.items, 'bridge');
-        } else if (d.at && Date.now() - d.at < 45_000) {
-          pumpBridgeAtRef.current = d.at; // heartbeat: someone is bridging (quiet feed)
-          setPumpBridgeAt(d.at);
-        }
-      } catch {
-        /* endpoint absent — event bridge / fallback poll still work */
-      }
-    }, 3_000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, []);
-
-  // fallback: direct poll through the same-origin proxy — pump.fun only
-  // authenticates real browsers, so this ALWAYS 401s (pump-fun-api.md "Auth
-  // findings": even a minutes-old token 401s from any server, local or
-  // Vercel). It stays for the day that changes but self-stops after three
-  // consecutive 401s; meanwhile it sleeps 30s after any bridge delivery.
+  // primary: poll through the same-origin proxy with the toolbar token —
+  // verified 2026-09-21 from both a residential IP and the Vercel function.
+  // A 401 means the token went stale (rotates on every re-login, ~30-day
+  // expiry): paste a fresh one; the poll self-stops after three consecutive
+  // 401s meanwhile, and sleeps 30s after any same-machine bridge delivery.
   useEffect(() => {
     const kinds = Object.keys(pumpGroups).flatMap((g) => (pumpGroups[g] ? PUMP_KINDS[g] : []));
     if (!pumpToken || kinds.length === 0) {
       if (Date.now() - pumpBridgeAtRef.current > 60_000) {
-        setPumpStatus({ state: 'idle', detail: pumpToken ? 'pick a kind' : 'no bridge' });
+        setPumpStatus({ state: 'idle', detail: pumpToken ? 'pick a kind' : 'no token' });
       }
       return undefined;
     }
@@ -821,11 +796,10 @@ function TokenMonitor() {
         if (r.status === 401) {
           authFails += 1;
           if (authFails >= 3) {
-            // dead end: pump.fun authenticates only real browsers, so the
-            // server-side poll can never succeed — stop hammering it (the
-            // bridge userscript is the source). Changing the token or kinds
-            // re-enters this effect and retries from scratch.
-            setPumpStatus({ state: 'auth', detail: '401 — bridge required' });
+            // stale token: pump.fun rotates tokens on every login (~30-day
+            // expiry) — stop hammering until a fresh one is pasted. Changing
+            // the token or kinds re-enters this effect and retries cleanly.
+            setPumpStatus({ state: 'auth', detail: '401 — paste fresh token' });
             return;
           }
           setPumpStatus({ state: 'auth', detail: '401' });
@@ -1274,15 +1248,14 @@ function TokenMonitor() {
         </section>
 
         {/* Panel 3: pump.fun following alerts — what YOUR followed accounts
-            call & trade, bridged from a logged-in pump.fun tab by
-            scripts/pump-fun-bridge.user.js (direct poll fallback via
-            /api/pump-api, auth_token in the toolbar — browser-only auth
-            always 401s it server-side, so the poll self-stops) */}
+            call & trade, polled server-side via /api/pump-api with the toolbar
+            auth_token (rotates on re-login, ~30-day expiry — the poll
+            self-stops on 401 until a fresh token is pasted) */}
         <section className="tm-panel tm-pump">
           <header className="tm-panel-head">
             <div>
               <h2>pump.fun Following</h2>
-              <span className="tm-sub">following-positions/alerts · bridge feed</span>
+              <span className="tm-sub">following-positions/alerts · token poll</span>
             </div>
             <div className="tm-head-actions">
               <label
@@ -1328,7 +1301,7 @@ function TokenMonitor() {
               {pumpToken && (
                 <span
                   className="tm-exp"
-                  title="auth_token fingerprint for the poll fallback — rotates on every pump.fun login"
+                  title="auth_token fingerprint — rotates on every pump.fun login (~30-day expiry)"
                 >
                   token …{pumpToken.slice(-6)}
                 </span>
@@ -1339,8 +1312,8 @@ function TokenMonitor() {
                 className="tm-input tm-input-jwt"
                 type="text"
                 spellCheck={false}
-                title="DevTools → Application → Cookies → pump.fun → auth_token. Fallback poll only — pump.fun's browser-only auth usually 401s server-side use, so the Tampermonkey bridge is the primary source."
-                placeholder="pump.fun auth_token cookie (poll fallback)"
+                title="DevTools → Application → Cookies → pump.fun → auth_token. Powers the server-side poll; rotates on every pump.fun login (~30-day expiry) — paste a fresh one if the panel shows 401."
+                placeholder="pump.fun auth_token cookie"
                 defaultValue={pumpToken}
                 onChange={(e) => {
                   const v = e.target.value.trim();
@@ -1363,14 +1336,14 @@ function TokenMonitor() {
                 {Object.values(pumpGroups).every((v) => !v)
                   ? 'all kind chips are off — enable Calls / Trades / Posts above…'
                   : now - pumpBridgeAt < 60_000
-                    ? 'Bridge connected — waiting for alerts from your followed accounts…'
+                    ? 'Bridge relay live — waiting for alerts from your followed accounts…'
                     : pumpStatus.state === 'auth'
-                      ? 'unauthorized — pump.fun only accepts real browser requests; use the Tampermonkey bridge (scripts/pump-fun-bridge.user.js)'
+                      ? 'unauthorized — the auth_token went stale (pump.fun rotates it on every login, ~30-day expiry); paste a fresh one in the toolbar above'
                       : pumpStatus.state === 'error'
                         ? `pump.fun api error ${pumpStatus.detail} — retrying…`
                         : pumpStatus.state === 'ok'
                           ? 'Connected — waiting for alerts…'
-                          : 'no bridge yet — install scripts/pump-fun-bridge.user.js in Tampermonkey and keep a logged-in pump.fun tab open (pinned/background is fine)'}
+                          : 'paste your pump.fun auth_token above to start the feed (DevTools → Application → Cookies → pump.fun → auth_token)'}
               </div>
             )}
             {visiblePump.map((c) => (
