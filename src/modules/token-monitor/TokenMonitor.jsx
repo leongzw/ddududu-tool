@@ -786,8 +786,11 @@ function TokenMonitor() {
     };
   }, []);
 
-  // fallback: direct poll through the vite proxy — only ever works if pump.fun
-  // accepts non-browser clients; sleeps 30s after any bridge delivery
+  // fallback: direct poll through the same-origin proxy — pump.fun only
+  // authenticates real browsers, so this ALWAYS 401s (pump-fun-api.md "Auth
+  // findings": even a minutes-old token 401s from any server, local or
+  // Vercel). It stays for the day that changes but self-stops after three
+  // consecutive 401s; meanwhile it sleeps 30s after any bridge delivery.
   useEffect(() => {
     const kinds = Object.keys(pumpGroups).flatMap((g) => (pumpGroups[g] ? PUMP_KINDS[g] : []));
     if (!pumpToken || kinds.length === 0) {
@@ -798,6 +801,7 @@ function TokenMonitor() {
     }
     let alive = true;
     let timer = null;
+    let authFails = 0; // consecutive 401s — server-side auth is impossible (browser-only)
     const path =
       `/following-positions/alerts?pageSize=10&kinds=${encodeURIComponent(kinds.join(','))}` +
       `&minTradeAmountUsd=${Math.max(0, pumpMinUsd || 0)}`;
@@ -815,6 +819,15 @@ function TokenMonitor() {
         const d = await r.json().catch(() => ({}));
         if (!alive) return;
         if (r.status === 401) {
+          authFails += 1;
+          if (authFails >= 3) {
+            // dead end: pump.fun authenticates only real browsers, so the
+            // server-side poll can never succeed — stop hammering it (the
+            // bridge userscript is the source). Changing the token or kinds
+            // re-enters this effect and retries from scratch.
+            setPumpStatus({ state: 'auth', detail: '401 — bridge required' });
+            return;
+          }
           setPumpStatus({ state: 'auth', detail: '401' });
         } else if (!r.ok || !Array.isArray(d.items)) {
           setPumpStatus({ state: 'error', detail: `${r.status}` });
@@ -835,12 +848,13 @@ function TokenMonitor() {
               });
             }
           }
+          authFails = 0;
           setPumpStatus({ state: 'ok', detail: 'poll' });
         }
       } catch {
         if (alive) setPumpStatus({ state: 'error', detail: 'network' });
       } finally {
-        if (alive) timer = setTimeout(poll, PUMP_POLL_MS);
+        if (alive && authFails < 3) timer = setTimeout(poll, PUMP_POLL_MS);
       }
     };
     poll();
@@ -1263,7 +1277,7 @@ function TokenMonitor() {
             call & trade, bridged from a logged-in pump.fun tab by
             scripts/pump-fun-bridge.user.js (direct poll fallback via
             /api/pump-api, auth_token in the toolbar — browser-only auth
-            usually 401s it) */}
+            always 401s it server-side, so the poll self-stops) */}
         <section className="tm-panel tm-pump">
           <header className="tm-panel-head">
             <div>

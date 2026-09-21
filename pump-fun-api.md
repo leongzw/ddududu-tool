@@ -159,5 +159,11 @@ the same smoke cases), so `ddududu-tool.vercel.app/api/*` works after a Git
 push. Caveats: `pump-ingest` state is per-instance memory (a cold start can
 drop one bridge POST; the next one — 10s later — catches up), and `fomo-token`
 reads `FOMO_SESSION_JSON` (env var) instead of the gitignored session file.
+Authed pump.fun reads still 401 from any server (browser-only auth — see
+"Auth findings"), which is why the bridge userscript is the source; v1.2.0+
+defaults `TOOL_URL` to the deployed origin and matches/@connects it, so a
+logged-in pump.fun tab on any machine feeds the deployed panel (same-browser
+GM-storage relay included). The Token Monitor's fallback poll self-stops
+after three consecutive 401s instead of hammering the endpoint forever.
 
 

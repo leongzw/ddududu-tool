@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         pump.fun → ddududu-tools following-feed bridge
 // @namespace    ddududu-tools
-// @version      1.1.1
+// @version      1.2.0
 // @description  Streams pump.fun's "following" alerts (what the accounts you follow call & trade) into ddududu-tools' Token Monitor. pump.fun's API only accepts real browser requests, so this polls from inside a logged-in pump.fun tab and relays the page to the tools app.
 // @match        https://pump.fun/*
 // @match        http://localhost:5173/*
 // @match        http://127.0.0.1:5173/*
 // @match        http://localhost:4173/*
 // @match        http://127.0.0.1:4173/*
+// @match        https://ddududu-tool.vercel.app/*
 // @run-at       document-idle
 // @grant        unsafeWindow
 // @grant        GM_getValue
@@ -16,6 +17,7 @@
 // @grant        GM_xmlhttpRequest
 // @connect      localhost
 // @connect      127.0.0.1
+// @connect      ddududu-tool.vercel.app
 // ==/UserScript==
 
 /* global unsafeWindow, GM_getValue, GM_setValue, GM_addValueChangeListener, GM_xmlhttpRequest */
@@ -30,8 +32,9 @@
  * alerts feed same-site — exactly the request pump.fun's own frontend makes —
  * and relays the latest page two ways:
  *   1. GM storage + a 'pump-feed-refresh' event on the tools app (same machine)
- *   2. POST /api/pump-ingest on the tools app (also works across the LAN —
- *      set TOOL_URL below to the machine running `npm run dev`)
+ *   2. POST /api/pump-ingest on the tools app (works across the LAN and to
+ *      the Vercel deployment — TOOL_URL below defaults to it; switch to the
+ *      dev-server address for local-only setups)
  *
  * On the tools app it just re-dispatches stored pages as window events;
  * TokenMonitor.jsx listens and merges them into the pump.fun panel.
@@ -41,10 +44,11 @@
   'use strict';
 
   const STORE_KEY = 'ddududu-pump-feed'; // { items, at } | null
-  // If the tools app runs on another machine, point this at it over the LAN
-  // (e.g. 'http://192.168.1.20:5173') and allow that host in Tampermonkey's
-  // @connect settings when prompted.
-  const TOOL_URL = 'http://localhost:5173';
+  // Where the deployed tools app lives — the ingest relay reaches it from any
+  // machine. For local-only dev switch to 'http://localhost:5173' (or a LAN
+  // address like 'http://192.168.1.20:5173') and allow that host in
+  // Tampermonkey's @connect settings when prompted.
+  const TOOL_URL = 'https://ddududu-tool.vercel.app';
   const FEED_URL =
     'https://frontend-api-v3.pump.fun/following-positions/alerts' +
     '?pageSize=10&kinds=callout,update,trade&minTradeAmountUsd=10'; // edit kinds to taste
@@ -52,7 +56,8 @@
   const STALE_MS = 60_000;
 
   const host = location.hostname;
-  const isTools = host === 'localhost' || host === '127.0.0.1';
+  const isTools =
+    host === 'localhost' || host === '127.0.0.1' || host === 'ddududu-tool.vercel.app';
 
   if (isTools) {
     const apply = (snap) => {
