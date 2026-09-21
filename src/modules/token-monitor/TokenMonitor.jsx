@@ -135,6 +135,23 @@ const trendEntry = (e) => {
 const LS_PUMP_TOKEN = 'token-monitor:pump-auth';
 const PUMP_POLL_MS = 5_000; // feed poll cadence (pauses 30s after same-machine bridge delivery)
 const PUMP_CHAINS = { 1399811149: 'Solana', 1: 'Ethereum', 8453: 'Base', 56: 'BSC' };
+// Catch the classic copy-mistake before burning a poll: the privy-id-token
+// cookie (ES256, iss privy.io, ~10h) is pump.fun's LOGIN material — the panel
+// needs the session cookie `auth_token` (HS256, address+userId, ~30-day).
+const pumpTokenProblem = (t) => {
+  try {
+    const part = (i) => JSON.parse(atob(t.split('.')[i].replace(/-/g, '+').replace(/_/g, '/')));
+    const h = part(0);
+    const p = part(1);
+    if (p.iss === 'privy.io' || h.alg === 'ES256') {
+      return "that's the privy-id-token cookie — copy the auth_token cookie instead";
+    }
+    if (!p.userId) return 'unrecognized token — expected the auth_token cookie (HS256, has userId)';
+  } catch {
+    /* not a decodable JWT — let the server judge */
+  }
+  return null;
+};
 const pumpChain = (id) => (id == null ? '' : PUMP_CHAINS[id] || `#${id}`);
 // kind chips: calls = callout+update, trades = trade, posts = the social kinds
 // (their site defaults to callout,update,trade)
@@ -774,6 +791,11 @@ function TokenMonitor() {
       }
       return undefined;
     }
+    const tokenProblem = pumpTokenProblem(pumpToken);
+    if (tokenProblem) {
+      setPumpStatus({ state: 'auth', detail: tokenProblem });
+      return undefined;
+    }
     let alive = true;
     let timer = null;
     let authFails = 0; // consecutive 401s — server-side auth is impossible (browser-only)
@@ -1338,7 +1360,11 @@ function TokenMonitor() {
                   : now - pumpBridgeAt < 60_000
                     ? 'Bridge relay live — waiting for alerts from your followed accounts…'
                     : pumpStatus.state === 'auth'
-                      ? 'unauthorized — the auth_token went stale (pump.fun rotates it on every login, ~30-day expiry); paste a fresh one in the toolbar above'
+                      ? `unauthorized — ${
+                          pumpStatus.detail && !pumpStatus.detail.startsWith('401')
+                            ? pumpStatus.detail
+                            : 'the auth_token went stale (pump.fun rotates it on every login, ~30-day expiry); paste a fresh one in the toolbar above'
+                        }`
                       : pumpStatus.state === 'error'
                         ? `pump.fun api error ${pumpStatus.detail} — retrying…`
                         : pumpStatus.state === 'ok'

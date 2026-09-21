@@ -20,6 +20,24 @@ export default async function handler(req, res) {
   }
   const token =
     typeof body.token === 'string' && /^[A-Za-z0-9._-]{20,}$/.test(body.token) ? body.token : null;
+  if (token) {
+    // guard the classic copy-mistake: privy-id-token (ES256, iss privy.io) is
+    // pump.fun's LOGIN material — the session cookie is auth_token (HS256)
+    try {
+      const [h, p] = token
+        .split('.')
+        .slice(0, 2)
+        .map((s) =>
+          JSON.parse(Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString()),
+        );
+      if (p.iss === 'privy.io' || h.alg === 'ES256') {
+        json(res, 400, { error: 'privy-id-token passed — copy the auth_token cookie instead' });
+        return;
+      }
+    } catch {
+      /* not a decodable JWT — forward and let pump.fun judge */
+    }
+  }
   try {
     const r = await fetch(`https://frontend-api-v3.pump.fun${body.path}`, {
       headers: {

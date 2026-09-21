@@ -58,6 +58,12 @@ posts — newest first with cursor paging.
   `Cookie: auth_token=…` suffices). Server-side polling works; the token just
   has to be current (re-login rotates it, ~30-day `exp`). If a server-side
   call 401s, suspect the token first, not the transport.
+- **Which cookie to copy:** `auth_token` (HS256, `address`/`userId`, ~30-day
+  `exp`) — NOT `privy-id-token` (ES256, `iss: privy.io`, ~10h), which is the
+  Privy login material pump.fun exchanges for the session (2026-09-21: a
+  pasted privy-id-token 401'd through the proxy while the real auth_token
+  200'd seconds later). The proxy and the panel now detect and reject it with
+  a hint instead of a bare 401.
 - Client attach style (from the bundle): `credentials: "include"` cookie +
   optional `Authorization: Bearer` hook + `x-device-id` from `generateDeviceId()`.
 
