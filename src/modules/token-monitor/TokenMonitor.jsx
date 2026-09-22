@@ -133,7 +133,7 @@ const trendEntry = (e) => {
 
 // ---- pump.fun following-alerts helpers (contract from their bundle's zod registry) ----
 const LS_PUMP_TOKEN = 'token-monitor:pump-auth';
-const PUMP_POLL_MS = 5_000; // feed poll cadence (pauses 30s after same-machine bridge delivery)
+const PUMP_POLL_MS = 5_000; // feed poll cadence
 const PUMP_CHAINS = { 1399811149: 'Solana', 1: 'Ethereum', 8453: 'Base', 56: 'BSC' };
 // Catch the classic copy-mistake before burning a poll: the privy-id-token
 // cookie (ES256, iss privy.io, ~10h) is pump.fun's LOGIN material — the panel
@@ -301,14 +301,11 @@ function TokenMonitor() {
     };
   }, [jwt, feedId, pushActivity, applyTrendMsg]);
 
-  // ---- JWT auto-refresh: headless refresher daemon + bridge userscript ----
-  // Two automatic sources feed fresh Privy JWTs into this component:
-  //   1. scripts/fomo-token-refresher.mjs — refreshes with Privy directly
-  //      (no browser needed) and exposes the token at /api/fomo-token via a
-  //      vite plugin in vite.config.js; polled below
-  //   2. scripts/fomo-token-bridge.user.js (Tampermonkey) — dispatches a
-  //      'fomo-token-refresh' event from a logged-in fomo.family tab
-  // Applying a new jwt re-triggers the socket effect above → auto reconnect.
+  // ---- JWT auto-refresh: daemon poll + in-page Privy session refresh ----
+  // Fresh Privy JWTs reach this component from the /api/fomo-token poll below
+  // (the optional scripts/fomo-token-refresher.mjs daemon), the in-page Privy
+  // session refresh seeded via the settings input (see below), or a manual
+  // paste. Applying a new jwt re-triggers the socket effect above → reconnect.
   const [autoAt, setAutoAt] = useState(0);
   const jwtRef = useRef(jwt);
   jwtRef.current = jwt;
@@ -325,12 +322,6 @@ function TokenMonitor() {
     setAutoAt(Date.now());
   }, []);
 
-  useEffect(() => {
-    const onRefresh = (e) => applyToken(e.detail?.token);
-    window.addEventListener('fomo-token-refresh', onRefresh);
-    return () => window.removeEventListener('fomo-token-refresh', onRefresh);
-  }, [applyToken]);
-
   // Poll the refresher daemon's endpoint (silently no-ops when it isn't
   // running or the app is deployed statically without the vite plugin).
   useEffect(() => {
@@ -342,7 +333,7 @@ function TokenMonitor() {
         const s = await r.json();
         if (alive && s?.token) applyToken(s.token);
       } catch {
-        /* endpoint absent — userscript bridge / manual paste still work */
+        /* endpoint absent — manual paste still works */
       }
     };
     poll();
@@ -750,11 +741,9 @@ function TokenMonitor() {
   // GET /following-positions/alerts. 2026-09-21 correction (pump-fun-api.md
   // "Auth findings"): the authed API DOES accept server-side calls with a
   // live auth_token — earlier 401s were rotated-out tokens (pump.fun rotates
-  // tokens on every login). So the primary source is the /api/pump-api poll
-  // below with the toolbar token; scripts/pump-fun-bridge.user.js remains an
-  // optional same-machine accelerator ('pump-feed-refresh' GM-storage events
-  // merge in, dedupe by item key). Token lifecycle: rotates on every re-login,
-  // ~30-day expiry — on 401 the poll self-stops until a fresh token is pasted.
+  // tokens on every login). The poll below with the toolbar token is the only
+  // source. Token lifecycle: rotates on every re-login, ~30-day expiry — on
+  // 401 the poll self-stops until a fresh token is pasted.
   // (pumpAlerts itself is declared above tokenStats.)
   const [pumpStatus, setPumpStatus] = useState({ state: 'idle', detail: '' }); // idle | ok | auth | error
   const [pumpToken, setPumpToken] = useState(() => localStorage.getItem(LS_PUMP_TOKEN) || '');
@@ -762,52 +751,18 @@ function TokenMonitor() {
   const [pumpGroups, setPumpGroups] = useState({ calls: true, trades: true, posts: false });
   const [pumpPaused, setPumpPaused] = useState(false);
   const [pumpMissed, setPumpMissed] = useState(0);
-  const [pumpBridgeAt, setPumpBridgeAt] = useState(0); // last relay seen — drives the toolbar heartbeat chip
   const pumpPausedRef = useRef(false);
   pumpPausedRef.current = pumpPaused;
-  const pumpSeenRef = useRef(null); // item keys from the previous fallback poll
-  const pumpBridgeAtRef = useRef(0); // last bridge delivery — suppresses the fallback poll
-  const mergePumpRef = useRef(null);
-  mergePumpRef.current = (items, tag) => {
-    const at = Date.now();
-    pumpBridgeAtRef.current = at;
-    setPumpBridgeAt(at);
-    if (pumpPausedRef.current) {
-      setPumpMissed((n) => n + items.length);
-      return;
-    }
-    setPumpAlerts((prev) => {
-      const have = new Set(prev.map((p) => p.key));
-      const add = items
-        .filter(Boolean)
-        .map((it) => pumpRow(it, alertKey(it), true))
-        .filter((x) => !have.has(x.key));
-      if (!add.length) return prev;
-      return [...add, ...prev].slice(0, 150);
-    });
-    setPumpStatus({ state: 'ok', detail: tag });
-  };
+  const pumpSeenRef = useRef(null); // item keys from the previous poll
 
-  // bridge path 1: same-machine GM-storage relay → window event
-  useEffect(() => {
-    const onFeed = (e) => {
-      if (Array.isArray(e.detail?.items)) mergePumpRef.current(e.detail.items, 'bridge');
-    };
-    window.addEventListener('pump-feed-refresh', onFeed);
-    return () => window.removeEventListener('pump-feed-refresh', onFeed);
-  }, []);
-
-  // primary: poll through the same-origin proxy with the toolbar token —
-  // verified 2026-09-21 from both a residential IP and the Vercel function.
-  // A 401 means the token went stale (rotates on every re-login, ~30-day
-  // expiry): paste a fresh one; the poll self-stops after three consecutive
-  // 401s meanwhile, and sleeps 30s after any same-machine bridge delivery.
+  // poll through the same-origin proxy with the toolbar token — verified
+  // 2026-09-21 from both a residential IP and the Vercel function. A 401
+  // means the token went stale (rotates on every re-login, ~30-day expiry):
+  // paste a fresh one; the poll self-stops after three consecutive 401s.
   useEffect(() => {
     const kinds = Object.keys(pumpGroups).flatMap((g) => (pumpGroups[g] ? PUMP_KINDS[g] : []));
     if (!pumpToken || kinds.length === 0) {
-      if (Date.now() - pumpBridgeAtRef.current > 60_000) {
-        setPumpStatus({ state: 'idle', detail: pumpToken ? 'pick a kind' : 'no token' });
-      }
+      setPumpStatus({ state: 'idle', detail: pumpToken ? 'pick a kind' : 'no token' });
       return undefined;
     }
     const tokenProblem = pumpTokenProblem(pumpToken);
@@ -817,15 +772,11 @@ function TokenMonitor() {
     }
     let alive = true;
     let timer = null;
-    let authFails = 0; // consecutive 401s — server-side auth is impossible (browser-only)
+    let authFails = 0; // consecutive 401s — stale-token tripwire
     const path =
       `/following-positions/alerts?pageSize=10&kinds=${encodeURIComponent(kinds.join(','))}` +
       `&minTradeAmountUsd=${Math.max(0, pumpMinUsd || 0)}`;
     const poll = async () => {
-      if (Date.now() - pumpBridgeAtRef.current < 30_000) {
-        timer = setTimeout(poll, PUMP_POLL_MS); // bridge is live — stay quiet
-        return;
-      }
       try {
         const r = await fetch('/api/pump-api', {
           method: 'POST',
@@ -857,10 +808,14 @@ function TokenMonitor() {
               .filter((it) => !seen.has(alertKey(it)))
               .map((it) => pumpRow(it, alertKey(it), true));
             if (add.length) {
-              setPumpAlerts((prev) => {
-                const have = new Set(prev.map((p) => p.key));
-                return [...add.filter((f) => !have.has(f.key)), ...prev].slice(0, 150);
-              });
+              if (pumpPausedRef.current) {
+                setPumpMissed((n) => n + add.length); // paused — count, don't render
+              } else {
+                setPumpAlerts((prev) => {
+                  const have = new Set(prev.map((p) => p.key));
+                  return [...add.filter((f) => !have.has(f.key)), ...prev].slice(0, 150);
+                });
+              }
             }
           }
           authFails = 0;
@@ -879,7 +834,7 @@ function TokenMonitor() {
     };
   }, [pumpToken, pumpGroups, pumpMinUsd]);
 
-  // chips filter client-side (the bridge relays whatever kinds the userscript polls)
+  // chips filter client-side (the poll fetches exactly the enabled kinds)
   const visiblePump = useMemo(() => {
     const on = new Set(Object.keys(pumpGroups).flatMap((g) => (pumpGroups[g] ? PUMP_KINDS[g] : [])));
     return pumpAlerts.filter((a) => on.has(a.kind));
@@ -1155,7 +1110,7 @@ function TokenMonitor() {
               {autoAt > 0 && (
                 <span
                   className="tm-exp"
-                  title="JWT auto-refreshed in-page via the Privy session proxy (and/or the optional refresher daemon + bridge userscript)"
+                  title="JWT auto-refreshed in-page via the Privy session proxy (and/or the optional refresher daemon)"
                 >
                   auto ⟳ {timeAgo(new Date(autoAt).toISOString(), now)} ago
                 </span>
@@ -1163,7 +1118,7 @@ function TokenMonitor() {
               {refreshNote && (
                 <span
                   className="tm-exp bad"
-                  title="Auto-refresh is not healthy. Seeds live in this origin's localStorage — a new site (localhost → ddududu-tool.vercel.app) starts empty, so paste the privy-refresh-token once there. Also: a logged-in fomo.family tab refreshes the same single-use session and rotates the token away from this page (install the bridge userscript, or close the tab)."
+                  title="Auto-refresh is not healthy. Seeds live in this origin's localStorage — a new site (localhost → ddududu-tool.vercel.app) starts empty, so paste the privy-refresh-token once there. Also: a logged-in fomo.family tab refreshes the same single-use session and rotates the token away from this page — close it and let the panel own the session."
                 >
                   auto {refreshNote}
                 </span>
@@ -1328,25 +1283,20 @@ function TokenMonitor() {
               </button>
             </div>
           </header>
-          {/* pump.fun bridge + fallback session — mirrors the fomo toolbar row:
-              status + heartbeat chips on the left, auth_token input on the right */}
+          {/* pump.fun session toolbar — mirrors the fomo toolbar row:
+              status chips on the left, auth_token input on the right */}
           <div className="tm-toolbar">
             <div className="tm-status">
               <span
                 className={`tm-dot ${pumpDot}`}
                 title={
                   pumpStatus.state === 'auth'
-                    ? 'unauthorized — pump.fun only accepts real browser requests; the Tampermonkey bridge is the primary source'
+                    ? 'unauthorized — the auth_token went stale (rotates on every pump.fun login, ~30-day expiry); paste a fresh one'
                     : `pump.fun ${pumpStatus.state} ${pumpStatus.detail}`.trim()
                 }
               />
               <span className="tm-state">{pumpStatus.state}</span>
               {pumpStatus.detail && <span className="tm-detail">{pumpStatus.detail}</span>}
-              {pumpBridgeAt > 0 && (
-                <span className="tm-exp" title="last page relayed by the Tampermonkey bridge userscript">
-                  bridge ⟳ {timeAgo(new Date(pumpBridgeAt).toISOString(), now)} ago
-                </span>
-              )}
               {pumpToken && (
                 <span
                   className="tm-exp"
@@ -1384,19 +1334,17 @@ function TokenMonitor() {
               <div className="tm-empty">
                 {Object.values(pumpGroups).every((v) => !v)
                   ? 'all kind chips are off — enable Calls / Trades / Posts above…'
-                  : now - pumpBridgeAt < 60_000
-                    ? 'Bridge relay live — waiting for alerts from your followed accounts…'
-                    : pumpStatus.state === 'auth'
-                      ? `unauthorized — ${
-                          pumpStatus.detail && !pumpStatus.detail.startsWith('401')
-                            ? pumpStatus.detail
-                            : 'the auth_token went stale (pump.fun rotates it on every login, ~30-day expiry); paste a fresh one in the toolbar above'
-                        }`
-                      : pumpStatus.state === 'error'
-                        ? `pump.fun api error ${pumpStatus.detail} — retrying…`
-                        : pumpStatus.state === 'ok'
-                          ? 'Connected — waiting for alerts…'
-                          : 'paste your pump.fun auth_token above to start the feed (DevTools → Application → Cookies → pump.fun → auth_token)'}
+                  : pumpStatus.state === 'auth'
+                    ? `unauthorized — ${
+                        pumpStatus.detail && !pumpStatus.detail.startsWith('401')
+                          ? pumpStatus.detail
+                          : 'the auth_token went stale (pump.fun rotates it on every login, ~30-day expiry); paste a fresh one in the toolbar above'
+                      }`
+                    : pumpStatus.state === 'error'
+                      ? `pump.fun api error ${pumpStatus.detail} — retrying…`
+                      : pumpStatus.state === 'ok'
+                        ? 'Connected — waiting for alerts…'
+                        : 'paste your pump.fun auth_token above to start the feed (DevTools → Application → Cookies → pump.fun → auth_token)'}
               </div>
             )}
             {visiblePump.map((c) => (
@@ -1524,7 +1472,7 @@ function TokenMonitor() {
                         </span>
                       )}
                       {b.pf > 0 && (
-                        <span className="tm-tip-src" title="buys seen via the pump.fun bridge">
+                        <span className="tm-tip-src" title="buys seen via the pump.fun following poll">
                           PF {b.pf}
                         </span>
                       )}

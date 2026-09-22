@@ -67,54 +67,16 @@ posts — newest first with cursor paging.
 - Client attach style (from the bundle): `credentials: "include"` cookie +
   optional `Authorization: Bearer` hook + `x-device-id` from `generateDeviceId()`.
 
-### Solution shipped: `scripts/pump-fun-bridge.user.js`
+### Panel source: server-side poll with a pasted token (userscript removed)
 
-Historically the primary source; **optional since 2026-09-21** — the panel now
-polls `/api/pump-api` server-side with a live toolbar token (see the correction
-under "Auth findings"). v1.3.0 of the userscript keeps only the same-machine
-path: it polls `/following-positions/alerts` inside a logged-in pump.fun tab
-and pushes pages into GM storage → `pump-feed-refresh` window event on the
-tools app opened in the same browser (dev server or deployed site); the
-`POST /api/pump-ingest` cross-machine relay was removed along with the
-endpoint. The panel merges relayed items (dedupe by item key, `fresh`
-highlight) and its Calls/Trades/Posts chips filter client-side.
-
-v1.1.0 bridge/panel notes:
-- The pump.fun tab may be pinned/background — v1.0.0 skipped polling whenever
-  `document.hidden` (i.e. always, in exactly that deployment) which left the
-  panel eternally empty; hidden tabs now poll too (the browser merely throttles
-  the interval to ~1/min, which the feed tolerates).
-- Every successful poll relays a snapshot, **including empty ones** — an empty
-  page is a heartbeat proving the bridge is alive; the panel shows
-  `bridge ⟳ Ns ago` and "Bridge connected — waiting for alerts…" instead of a
-  misleading "no source" state.
-- The pump panel's layout mirrors the fomo panel: header (min $ / Pause /
-    Clear) → toolbar (status dot + heartbeat/token chips | auth_token input) →
-  count/filter chips (colored by group) → rows colored by action (calls
-  purple, trades green/red by side).
-
-v1.1.1 bridge/panel notes:
-- **Panel-side root cause of the still-empty panel:** `pumpRow()` never set a
-  `kind` field, so the Calls/Trades/Posts filter
-  (`visiblePump = pumpAlerts.filter(a => on.has(a.kind))`) matched `undefined`
-  and dropped **every** row no matter what the bridge delivered (pre-existing
-  bug, previously masked by the v1.1.0 bridge issues). Rows now carry `kind`.
-- **Clock-skew immunity:** `POST /api/pump-ingest` stamps `at` server-side on
-  receipt; the bridge's client timestamp is preserved as `clientAt`. A relay
-  box with a skewed clock (e.g. Mac −5 min vs the Windows tools machine) can
-  no longer make fresh pages look stale.
-- **Relay failures are no longer silent:** the userscript warns to the pump.fun
-  tab console, throttled to 1/min (`[pump-bridge] relay … failed`). When the
-  panel is empty that console is the first thing to check — then verify
-  `TOOL_URL` points at the tools machine's LAN address, the dev server runs
-  with `--host`, and Tampermonkey's `@connect` allows it.
-
-v1.3.0 bridge/panel notes:
-- `/api/pump-ingest` removed (endpoint + relay + panel polling): live-token
-  server polls via `/api/pump-api` are the primary source (2026-09-21
-  correction), so the bridge no longer POSTs anywhere — GM-storage events only.
-- The panel's poll self-stops after three consecutive 401s with status
-  `401 — paste fresh token` (rotated/expired token); re-pasting restarts it.
+The Tampermonkey bridge (`scripts/pump-fun-bridge.user.js`, v1.0.0–v1.3.0) was
+**removed on 2026-09-22** — manual-token operation only. The panel polls
+`/api/pump-api` server-side with the toolbar token (see the correction under
+"Auth findings"), merges pages (dedupe by item key, `fresh` highlight), and its
+Calls/Trades/Posts chips filter client-side. The poll self-stops after three
+consecutive 401s with status `401 — paste fresh token` (rotated/expired token);
+re-pasting restarts it. Historical bridge/panel notes live in git history
+(commits up to `e818d44`).
 
 ### Realtime path (future)
 
@@ -124,11 +86,11 @@ presenceTtlSeconds }` — CC publishes stream events **only for viewers with liv
 presence**; re-register every heartbeat (best-effort: a registry outage serves
 `{subject: null}` and the site degrades to HTTP polling). `DELETE
 .../presence` removes it. So push updates = presence → subscribe to the
-returned subject on the NATS WS (which itself is `auth_required`). Note the
-presence/auth REST and the NATS WS sit behind the same browser-only auth (see
-"Auth findings"), so from the tools app the socket is as unreachable as the
-REST — the shipped bridge polls REST from inside the browser; an in-page
-presence+NATS upgrade for the userscript is the future step.
+returned subject on the NATS WS (which itself is `auth_required`). The
+presence/auth REST and the NATS WS use the same auth_token cookie (see "Auth
+findings" and its 2026-09-21 correction), so a live token should reach them
+from anywhere the REST works — an in-page presence+NATS upgrade in the
+`/api/pump-api` proxy style is the plausible future step.
 
 ## Other endpoints worth knowing (from the bundle's zod route registry)
 
@@ -168,7 +130,8 @@ registered presence (see Realtime path).
   authed reads while the token is live (see the 2026-09-21 correction above);
   it is the pump panel's primary data source.
 - `GET/POST /api/pump-ingest` — **removed 2026-09-21** together with the
-  bridge relay (history in git, commit 1bd4507).
+  bridge relay (history in git, commit 1bd4507); the Tampermonkey userscript
+  itself followed on 2026-09-22.
 
 ### Vercel deployment (api/)
 

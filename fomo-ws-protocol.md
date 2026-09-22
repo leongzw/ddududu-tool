@@ -186,22 +186,15 @@ function FVe() {                                    // exported as bR, imported 
    (re)connect, always freshly minted via `getCustomerAccessToken()`
 4. `Authorization: Bearer <jwt>` headers on fomo's authenticated REST calls
 
-### Solution shipped: `scripts/fomo-token-bridge.user.js`
-A Tampermonkey/Violentmonkey userscript (install once, keep a logged-in fomo.family
-tab open — pinned/background is fine):
+### Bridge userscript (removed 2026-09-22)
 
-- **on fomo.family** — watches sources 1–4 above (localStorage poll, cookie poll,
-  `WebSocket.send` + `fetch` hooks on `unsafeWindow`) and stores the longest-lived
-  valid token in GM storage;
-- **on the tools app** (`localhost:5173` / `:4173`) — pushes new tokens into
-  `localStorage['token-monitor:jwt']` and dispatches a `fomo-token-refresh` event;
-  `TokenMonitor.jsx` listens for it, applies the upgraded JWT (which reconnects the
-  socket via the existing `[jwt, feedId]` effect) and shows an `auto ⟳` chip in the
-  toolbar. Manual paste still works and is never downgraded by an older harvested token.
-
-Limits: the fomo tab must stay logged in (Privy sessions last 30 d by default, so
-re-login roughly monthly, or sooner if you log out). For fully headless operation,
-the same four sources can be scraped from a Playwright persistent profile instead.
+`scripts/fomo-token-bridge.user.js` (v1.0.0–v1.1.0) was a Tampermonkey relay
+that harvested tokens from sources 1–4 above inside a logged-in fomo.family
+tab and pushed them into the tools app (a `fomo-token-refresh` window event).
+Removed — manual operation only now: paste the JWT, or seed the in-page Privy
+session refresh below once. The four harvest sources above remain accurate
+should a headless collector (e.g. a Playwright persistent profile) ever be
+wanted again (the script lives in git history, up to commit `e818d44`).
 
 ### Fully automatic, headless
 
@@ -227,10 +220,8 @@ direct, and `/api/fomo-token` reports the (unset) `FOMO_SESSION_JSON` session.
 What does NOT carry over is localStorage: JWT, feed id and the refresh-token
 seed are per-origin, so re-paste them once on the deployed site — the toolbar
 shows an `auto …` chip with the reason when the seed is missing or rejected.
-The bridge userscript v1.1.0+ also matches the deployed origin. Mind the
-single-consumer rule: a logged-in fomo.family tab rotates the refresh token
-~hourly — run the bridge userscript with it, or close it and let the panel own
-the session.
+Mind the single-consumer rule: a logged-in fomo.family tab rotates the refresh
+token ~hourly — close it and let the panel own the session.
 
 **Optional — `scripts/fomo-token-refresher.mjs` daemon** (`npm run fomo-token --
 <refresh-token>`) for keeping tokens fresh while the page is closed; serves
