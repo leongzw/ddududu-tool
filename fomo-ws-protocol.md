@@ -220,6 +220,18 @@ expiry, persists the rotated refresh token to
 30 s cross-tab localStorage lock prevents two tabs from racing the single-use
 token), and reconnects the socket. Works after the tab has been closed for days.
 
+**Deployed site (Vercel) notes (2026-09-22):** the `/api/*` ports behave
+identically — a dummy refresh token got Privy's `401 missing_or_invalid_token`
+relayed verbatim both through `ddududu-tool.vercel.app/api/privy-refresh` and
+direct, and `/api/fomo-token` reports the (unset) `FOMO_SESSION_JSON` session.
+What does NOT carry over is localStorage: JWT, feed id and the refresh-token
+seed are per-origin, so re-paste them once on the deployed site — the toolbar
+shows an `auto …` chip with the reason when the seed is missing or rejected.
+The bridge userscript v1.1.0+ also matches the deployed origin. Mind the
+single-consumer rule: a logged-in fomo.family tab rotates the refresh token
+~hourly — run the bridge userscript with it, or close it and let the panel own
+the session.
+
 **Optional — `scripts/fomo-token-refresher.mjs` daemon** (`npm run fomo-token --
 <refresh-token>`) for keeping tokens fresh while the page is closed; serves
 `GET /api/fomo-token` from `scripts/.fomo-session.json`. Seed only ONE of the

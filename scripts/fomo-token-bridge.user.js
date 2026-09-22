@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         fomo.family → ddududu-tools JWT bridge
 // @namespace    ddududu-tools
-// @version      1.0.0
+// @version      1.1.0
 // @description  Auto-refresh the Privy JWT used by ddududu-tools' Token Monitor. Keep a fomo.family tab logged in; every fresh token Privy mints there is relayed to the tools app automatically.
 // @match        https://fomo.family/*
+// @match        https://ddududu-tool.vercel.app/*
 // @match        http://localhost:5173/*
 // @match        http://127.0.0.1:5173/*
 // @match        http://localhost:4173/*
@@ -32,9 +33,10 @@
  *     4. `Authorization: Bearer <jwt>` headers on fomo's authenticated REST calls
  *   …and keeps the longest-lived one in Tampermonkey storage.
  *
- *   On the tools app (localhost) it pushes new tokens into
- *   localStorage['token-monitor:jwt'] and dispatches a 'fomo-token-refresh'
- *   event, which TokenMonitor.jsx listens for and reconnects with.
+ *   On the tools app (localhost or the deployed ddududu-tool.vercel.app) it
+ *   pushes new tokens into localStorage['token-monitor:jwt'] and dispatches a
+ *   'fomo-token-refresh' event, which TokenMonitor.jsx listens for and
+ *   reconnects with.
  *
  *   Limits: keep one logged-in fomo.family tab open (pinned/background is fine);
  *   re-login to fomo.family when Privy's 30-day session eventually expires.

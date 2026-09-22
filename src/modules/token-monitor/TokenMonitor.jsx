@@ -363,10 +363,16 @@ function TokenMonitor() {
   // else, and a cross-tab lock keeps two tabs from racing the single-use token.
   const [draftRefresh, setDraftRefresh] = useState('');
   const refreshRef = useRef(localStorage.getItem(LS_REFRESH) || '');
+  // why auto-refresh is (not) running — shown as an `auto …` toolbar chip so a
+  // missing/rejected seed is never a silent no-op (per-origin localStorage!)
+  const [refreshNote, setRefreshNote] = useState('');
 
   const privyRefresh = useCallback(async () => {
     const rt = refreshRef.current;
-    if (!rt) return false;
+    if (!rt) {
+      setRefreshNote('no seed — paste privy-refresh-token + Apply');
+      return false;
+    }
     try {
       const lock = JSON.parse(localStorage.getItem(REFRESH_LOCK) || 'null');
       if (lock && Date.now() - lock.at < 30_000) return false; // another tab is on it
@@ -389,23 +395,36 @@ function TokenMonitor() {
       if (s.session_update_action === 'clear') {
         localStorage.removeItem(LS_REFRESH); // session revoked — needs a new seed
         refreshRef.current = '';
+        setRefreshNote('session cleared — re-seed');
         return false;
       }
       if (s.refreshToken) {
         refreshRef.current = s.refreshToken;
         localStorage.setItem(LS_REFRESH, s.refreshToken); // rotate first, always
       }
-      if (s.token) applyToken(s.token);
+      if (s.token) {
+        applyToken(s.token);
+        setRefreshNote(''); // healthy again — the `auto ⟳` chip shows the time
+      } else {
+        // e.g. 401 missing_or_invalid_token: the seed was rotated out from
+        // under us by another session consumer (a logged-in fomo.family tab,
+        // the daemon) or revoked — only a fresh paste fixes it
+        setRefreshNote(`✗ ${s.code || s.error || 'no token'} — re-seed`);
+      }
       return Boolean(s.token);
     } catch {
-      return false; // dev server away / network blip — retried on the next tick
+      setRefreshNote('network — retrying');
+      return false; // proxy away / network blip — retried on the next tick
     } finally {
       localStorage.removeItem(REFRESH_LOCK);
     }
   }, [applyToken]);
 
   useEffect(() => {
-    if (!refreshRef.current) return undefined;
+    if (!refreshRef.current) {
+      setRefreshNote('no seed — paste privy-refresh-token + Apply');
+      return undefined;
+    }
     const maybe = () => {
       const p = jwtPayload(jwtRef.current);
       const left = p?.exp ? p.exp - Date.now() / 1000 : 0;
@@ -1139,6 +1158,14 @@ function TokenMonitor() {
                   title="JWT auto-refreshed in-page via the Privy session proxy (and/or the optional refresher daemon + bridge userscript)"
                 >
                   auto ⟳ {timeAgo(new Date(autoAt).toISOString(), now)} ago
+                </span>
+              )}
+              {refreshNote && (
+                <span
+                  className="tm-exp bad"
+                  title="Auto-refresh is not healthy. Seeds live in this origin's localStorage — a new site (localhost → ddududu-tool.vercel.app) starts empty, so paste the privy-refresh-token once there. Also: a logged-in fomo.family tab refreshes the same single-use session and rotates the token away from this page (install the bridge userscript, or close the tab)."
+                >
+                  auto {refreshNote}
                 </span>
               )}
             </div>
