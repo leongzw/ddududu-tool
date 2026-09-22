@@ -357,6 +357,16 @@ function TokenMonitor() {
   // why auto-refresh is (not) running — shown as an `auto …` toolbar chip so a
   // missing/rejected seed is never a silent no-op (per-origin localStorage!)
   const [refreshNote, setRefreshNote] = useState('');
+  // last few refresh attempts for the chip tooltip — makes "it stopped
+  // refreshing" self-diagnosing (when it worked, when/why it stopped)
+  const [refreshLog, setRefreshLog] = useState([]);
+  const noteRefresh = useCallback((text, log = text || 'ok') => {
+    setRefreshNote(text);
+    setRefreshLog((prev) =>
+      [...prev, `${new Date().toTimeString().slice(0, 8)} ${log}`].slice(-4),
+    );
+  }, []);
+  const refreshFailRef = useRef(0); // last hard failure — 5-min retry backoff
 
   const privyRefresh = useCallback(async () => {
     const rt = refreshRef.current;
@@ -386,7 +396,8 @@ function TokenMonitor() {
       if (s.session_update_action === 'clear') {
         localStorage.removeItem(LS_REFRESH); // session revoked — needs a new seed
         refreshRef.current = '';
-        setRefreshNote('session cleared — re-seed');
+        noteRefresh('session cleared — re-seed');
+        refreshFailRef.current = Date.now();
         return false;
       }
       if (s.refreshToken) {
@@ -395,21 +406,25 @@ function TokenMonitor() {
       }
       if (s.token) {
         applyToken(s.token);
-        setRefreshNote(''); // healthy again — the `auto ⟳` chip shows the time
+        noteRefresh('', s.session_update_action ? `ok (${s.session_update_action})` : 'ok');
+        refreshFailRef.current = 0;
       } else {
-        // e.g. 401 missing_or_invalid_token: the seed was rotated out from
-        // under us by another session consumer (a logged-in fomo.family tab,
-        // the daemon) or revoked — only a fresh paste fixes it
-        setRefreshNote(`✗ ${s.code || s.error || 'no token'} — re-seed`);
+        // e.g. 401 missing_or_invalid_token: the single-use seed was rotated
+        // out from under us by another session consumer (a logged-in
+        // fomo.family tab, a second seeded panel origin) or revoked — only a
+        // fresh paste fixes it
+        noteRefresh(`✗ ${s.code || s.error || 'no token'} — re-seed`);
+        refreshFailRef.current = Date.now();
       }
       return Boolean(s.token);
     } catch {
-      setRefreshNote('network — retrying');
-      return false; // proxy away / network blip — retried on the next tick
+      noteRefresh('network — retrying');
+      refreshFailRef.current = Date.now();
+      return false; // proxy away / network blip — retried after the backoff
     } finally {
       localStorage.removeItem(REFRESH_LOCK);
     }
-  }, [applyToken]);
+  }, [applyToken, noteRefresh]);
 
   useEffect(() => {
     if (!refreshRef.current) {
@@ -417,6 +432,7 @@ function TokenMonitor() {
       return undefined;
     }
     const maybe = () => {
+      if (Date.now() - refreshFailRef.current < 300_000) return; // hard-failure backoff
       const p = jwtPayload(jwtRef.current);
       const left = p?.exp ? p.exp - Date.now() / 1000 : 0;
       if (!p?.exp || left < 600) privyRefresh();
@@ -1118,7 +1134,7 @@ function TokenMonitor() {
               {refreshNote && (
                 <span
                   className="tm-exp bad"
-                  title="Auto-refresh is not healthy. Seeds live in this origin's localStorage — a new site (localhost → ddududu-tool.vercel.app) starts empty, so paste the privy-refresh-token once there. Also: a logged-in fomo.family tab refreshes the same single-use session and rotates the token away from this page — close it and let the panel own the session."
+                  title={`Auto-refresh is not healthy. Seeds live in this origin's localStorage — a new site (localhost → ddududu-tool.vercel.app) starts empty, so paste the privy-refresh-token once there. A rejected seed is nearly always a single-consumer collision: the refresh token is single-use and rotates on every refresh, so a logged-in fomo.family tab (its Privy SDK refreshes ~hourly) or a second seeded panel (localhost AND the deployed site) rotates it away — keep exactly one consumer, then re-paste a fresh seed.\n\nRecent attempts:\n${refreshLog.join('\n') || '—'}`}
                 >
                   auto {refreshNote}
                 </span>

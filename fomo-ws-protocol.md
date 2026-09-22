@@ -221,7 +221,13 @@ What does NOT carry over is localStorage: JWT, feed id and the refresh-token
 seed are per-origin, so re-paste them once on the deployed site — the toolbar
 shows an `auto …` chip with the reason when the seed is missing or rejected.
 Mind the single-consumer rule: a logged-in fomo.family tab rotates the refresh
-token ~hourly — close it and let the panel own the session.
+token ~hourly — close it and let the panel own the session. Signature symptom
+of a collision (2026-09-22): the panel refreshes exactly once after seeding,
+then every later attempt fails with `missing_or_invalid_token` — the rotated
+token was consumed elsewhere (fomo tab, or the same seed pasted on a second
+origin — localStorage copies are independent). The toolbar chip's tooltip
+keeps a timestamped log of the last few attempts to make this visible, and
+hard failures back off 5 min instead of hammering the dead seed every 60 s.
 
 **Optional — `scripts/fomo-token-refresher.mjs` daemon** (`npm run fomo-token --
 <refresh-token>`) for keeping tokens fresh while the page is closed; serves
